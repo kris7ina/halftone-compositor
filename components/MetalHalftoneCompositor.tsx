@@ -585,7 +585,17 @@ export default function MetalHalftoneCompositor() {
                 <div className="mhc-control-header"><label>Line Color</label></div>
                 <div className="mhc-color-row">
                   <input type="color" className="mhc-color-input" value={halftoneOpts.lineColor} onChange={(e) => setHalftoneOpts((p) => ({ ...p, lineColor: e.target.value }))} />
-                  <span className="mhc-color-hex">{halftoneOpts.lineColor}</span>
+                  <input
+                    type="text"
+                    className="mhc-color-hex-input"
+                    value={halftoneOpts.lineColor}
+                    onChange={(e) => {
+                      let v = e.target.value;
+                      if (!v.startsWith("#")) v = "#" + v;
+                      if (/^#[0-9a-fA-F]{0,6}$/.test(v)) setHalftoneOpts((p) => ({ ...p, lineColor: v }));
+                    }}
+                    spellCheck={false}
+                  />
                 </div>
               </div>
             </div>
@@ -609,7 +619,17 @@ export default function MetalHalftoneCompositor() {
                 {!transparentBg && (
                   <div className="mhc-color-row">
                     <input type="color" className="mhc-color-input" value={bgColor} onChange={(e) => setBgColor(e.target.value)} />
-                    <span className="mhc-color-hex">{bgColor}</span>
+                    <input
+                      type="text"
+                      className="mhc-color-hex-input"
+                      value={bgColor}
+                      onChange={(e) => {
+                        let v = e.target.value;
+                        if (!v.startsWith("#")) v = "#" + v;
+                        if (/^#[0-9a-fA-F]{0,6}$/.test(v)) setBgColor(v);
+                      }}
+                      spellCheck={false}
+                    />
                   </div>
                 )}
               </div>

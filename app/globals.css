@@ -203,9 +203,26 @@ body {
   padding: 2px;
 }
 
-.mhc-color-hex {
+.mhc-color-hex-input {
   font-size: 13px;
-  color: #666;
+  color: #888;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  font-family: inherit;
+  padding: 4px 6px;
+  width: 90px;
+  outline: none;
+  transition: all 0.15s ease;
+}
+
+.mhc-color-hex-input:hover {
+  border-color: #333;
+}
+
+.mhc-color-hex-input:focus {
+  border-color: #648dff;
+  color: #ededed;
 }
 
 /* ── Masks ─────────────────────────────────────────── */
