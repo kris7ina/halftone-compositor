@@ -9,6 +9,20 @@ interface HalftoneOptions {
   lineColor: string;
 }
 
+interface ImageAdjustments {
+  greyscale: boolean;
+  exposure: number;
+  contrast: number;
+  highlights: number;
+  shadows: number;
+  overlayColor: string;
+  overlayOpacity: number;
+  noiseEnabled: boolean;
+  noiseSize: number;
+  noiseColor: string;
+  noiseOpacity: number;
+}
+
 interface Mask {
   shape: "rectangle" | "circle" | "triangle";
   x: number;
@@ -32,6 +46,106 @@ interface HandlePosition {
   y: number;
   pos: "tl" | "tr" | "bl" | "br";
 }
+
+const DEFAULT_ADJUSTMENTS: ImageAdjustments = {
+  greyscale: false,
+  exposure: 0,
+  contrast: 0,
+  highlights: 0,
+  shadows: 0,
+  overlayColor: "#0d6847",
+  overlayOpacity: 0,
+  noiseEnabled: false,
+  noiseSize: 2,
+  noiseColor: "#ffffff",
+  noiseOpacity: 0.1,
+};
+
+// ─── Image Adjustment Processing ────────────────────────────────────────
+function applyImageAdjustments(
+  sourceCanvas: HTMLCanvasElement,
+  adj: ImageAdjustments
+): HTMLCanvasElement {
+  const width = sourceCanvas.width;
+  const height = sourceCanvas.height;
+  const srcCtx = sourceCanvas.getContext("2d")!;
+  const imageData = srcCtx.getImageData(0, 0, width, height);
+  const data = imageData.data;
+
+  const overlayRgb = adj.overlayOpacity > 0 ? hexToRgb(adj.overlayColor) : [0, 0, 0];
+  const oR = overlayRgb[0] / 255, oG = overlayRgb[1] / 255, oB = overlayRgb[2] / 255;
+  const noiseRgb = adj.noiseEnabled ? hexToRgb(adj.noiseColor) : [0, 0, 0];
+  const nR = noiseRgb[0] / 255, nG = noiseRgb[1] / 255, nB = noiseRgb[2] / 255;
+  const grain = Math.max(1, Math.round(adj.noiseSize));
+  const expFactor = Math.pow(2, adj.exposure);
+  const contrastFactor = 1 + adj.contrast;
+
+  const overlayBlend = (base: number, blend: number) =>
+    base < 0.5 ? 2 * base * blend : 1 - 2 * (1 - base) * (1 - blend);
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const i = (y * width + x) * 4;
+      if (data[i + 3] < 10) continue;
+
+      let r = data[i] / 255;
+      let g = data[i + 1] / 255;
+      let b = data[i + 2] / 255;
+
+      if (adj.greyscale) {
+        const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+        r = g = b = lum;
+      }
+
+      r *= expFactor;
+      g *= expFactor;
+      b *= expFactor;
+
+      r = (r - 0.5) * contrastFactor + 0.5;
+      g = (g - 0.5) * contrastFactor + 0.5;
+      b = (b - 0.5) * contrastFactor + 0.5;
+
+      const lum = 0.299 * clamp01(r) + 0.587 * clamp01(g) + 0.114 * clamp01(b);
+      const hW = Math.max(0, (lum - 0.5) * 2);
+      const sW = Math.max(0, (0.5 - lum) * 2);
+      const hsMod = adj.highlights * hW * 0.5 + adj.shadows * sW * 0.5;
+      r += hsMod;
+      g += hsMod;
+      b += hsMod;
+
+      if (adj.overlayOpacity > 0) {
+        const oa = adj.overlayOpacity;
+        const cr = clamp01(r), cg = clamp01(g), cb = clamp01(b);
+        r = cr * (1 - oa) + overlayBlend(cr, oR) * oa;
+        g = cg * (1 - oa) + overlayBlend(cg, oG) * oa;
+        b = cb * (1 - oa) + overlayBlend(cb, oB) * oa;
+      }
+
+      if (adj.noiseEnabled && adj.noiseOpacity > 0) {
+        const gx = Math.floor(x / grain);
+        const gy = Math.floor(y / grain);
+        const nv = ((Math.sin(gx * 12.9898 + gy * 78.233) * 43758.5453) % 1 + 1) % 1;
+        const no = adj.noiseOpacity * nv;
+        r = r * (1 - no) + nR * no;
+        g = g * (1 - no) + nG * no;
+        b = b * (1 - no) + nB * no;
+      }
+
+      data[i] = clamp255(r);
+      data[i + 1] = clamp255(g);
+      data[i + 2] = clamp255(b);
+    }
+  }
+
+  const outCanvas = document.createElement("canvas");
+  outCanvas.width = width;
+  outCanvas.height = height;
+  outCanvas.getContext("2d")!.putImageData(imageData, 0, 0);
+  return outCanvas;
+}
+
+function clamp01(v: number) { return v < 0 ? 0 : v > 1 ? 1 : v; }
+function clamp255(v: number) { return Math.max(0, Math.min(255, Math.round(v * 255))); }
 
 // ─── Halftone Processing ───────────────────────────────────────────────
 function applyLinearHalftone(
@@ -109,9 +223,10 @@ function drawMaskShape(ctx: CanvasRenderingContext2D, mask: Mask, s: number) {
 }
 
 function hexToRgb(hex: string): number[] {
-  const r = parseInt(hex.slice(1, 3), 16);
-  const g = parseInt(hex.slice(3, 5), 16);
-  const b = parseInt(hex.slice(5, 7), 16);
+  const h = hex.length >= 7 ? hex : "#000000";
+  const r = parseInt(h.slice(1, 3), 16);
+  const g = parseInt(h.slice(3, 5), 16);
+  const b = parseInt(h.slice(5, 7), 16);
   return [r, g, b];
 }
 
@@ -139,8 +254,38 @@ function Control({
   );
 }
 
+// ─── Color Picker + Hex Input ──────────────────────────────────────────
+function ColorControl({
+  label, value, onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <div className="mhc-control">
+      <div className="mhc-control-header"><label>{label}</label></div>
+      <div className="mhc-color-row">
+        <input type="color" className="mhc-color-input" value={value.length >= 7 ? value : "#000000"} onChange={(e) => onChange(e.target.value)} />
+        <input
+          type="text"
+          className="mhc-color-hex-input"
+          value={value}
+          onChange={(e) => {
+            let v = e.target.value;
+            if (!v.startsWith("#")) v = "#" + v;
+            if (/^#[0-9a-fA-F]{0,6}$/.test(v)) onChange(v);
+          }}
+          spellCheck={false}
+        />
+      </div>
+    </div>
+  );
+}
+
 // ─── Main Component ────────────────────────────────────────────────────
 export default function MetalHalftoneCompositor() {
+  const [rawImageCanvas, setRawImageCanvas] = useState<HTMLCanvasElement | null>(null);
   const [imageCanvas, setImageCanvas] = useState<HTMLCanvasElement | null>(null);
   const [halftoneCanvas, setHalftoneCanvas] = useState<HTMLCanvasElement | null>(null);
   const [masks, setMasks] = useState<Mask[]>([]);
@@ -149,6 +294,7 @@ export default function MetalHalftoneCompositor() {
   const [halftoneOpts, setHalftoneOpts] = useState<HalftoneOptions>({
     frequency: 20, angle: 90, thickness: 0.8, lineColor: "#ffffff",
   });
+  const [imageAdj, setImageAdj] = useState<ImageAdjustments>({ ...DEFAULT_ADJUSTMENTS });
   const [maskContent, setMaskContent] = useState<"halftone" | "metal">("halftone");
   const [bgColor, setBgColor] = useState("#0d6847");
   const [transparentBg, setTransparentBg] = useState(true);
@@ -163,7 +309,8 @@ export default function MetalHalftoneCompositor() {
   const containerRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dragStateRef = useRef<DragState | null>(null);
-  const processTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const halftoneTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const adjustTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isProcessingRef = useRef(false);
 
   const masksRef = useRef(masks);
@@ -198,7 +345,7 @@ export default function MetalHalftoneCompositor() {
         cvs.width = img.width;
         cvs.height = img.height;
         cvs.getContext("2d")!.drawImage(img, 0, 0);
-        setImageCanvas(cvs);
+        setRawImageCanvas(cvs);
         setCanvasSize({ width: img.width, height: img.height });
         setMasks([]);
         setSelectedMask(null);
@@ -210,12 +357,27 @@ export default function MetalHalftoneCompositor() {
     reader.readAsDataURL(file);
   }, []);
 
+  // ── Process Image Adjustments (debounced) ────────────────────────
+  useEffect(() => {
+    if (!rawImageCanvas) return;
+    if (adjustTimeoutRef.current) clearTimeout(adjustTimeoutRef.current);
+
+    adjustTimeoutRef.current = setTimeout(() => {
+      const processed = applyImageAdjustments(rawImageCanvas, imageAdj);
+      setImageCanvas(processed);
+    }, 60);
+
+    return () => {
+      if (adjustTimeoutRef.current) clearTimeout(adjustTimeoutRef.current);
+    };
+  }, [rawImageCanvas, imageAdj]);
+
   // ── Generate Halftone (debounced) ────────────────────────────────
   useEffect(() => {
     if (!imageCanvas) return;
-    if (processTimeoutRef.current) clearTimeout(processTimeoutRef.current);
+    if (halftoneTimeoutRef.current) clearTimeout(halftoneTimeoutRef.current);
 
-    processTimeoutRef.current = setTimeout(() => {
+    halftoneTimeoutRef.current = setTimeout(() => {
       const htCanvas = applyLinearHalftone(imageCanvas, {
         ...halftoneOpts,
         lineColor: hexToRgb(halftoneOpts.lineColor),
@@ -224,7 +386,7 @@ export default function MetalHalftoneCompositor() {
     }, 50);
 
     return () => {
-      if (processTimeoutRef.current) clearTimeout(processTimeoutRef.current);
+      if (halftoneTimeoutRef.current) clearTimeout(halftoneTimeoutRef.current);
     };
   }, [imageCanvas, halftoneOpts]);
 
@@ -554,6 +716,10 @@ export default function MetalHalftoneCompositor() {
     return () => window.removeEventListener("keydown", handleKey);
   }, []);
 
+  // ── Adjustment helpers ───────────────────────────────────────────
+  const adj = (key: keyof ImageAdjustments, value: number | boolean | string) =>
+    setImageAdj((p) => ({ ...p, [key]: value }));
+
   // ── Render ───────────────────────────────────────────────────────
   return (
     <div className="mhc-root">
@@ -576,30 +742,52 @@ export default function MetalHalftoneCompositor() {
 
         {imageLoaded && (
           <>
+            {/* ── Metal Image Adjustments ───────────── */}
+            <div className="mhc-section">
+              <div className="mhc-section-title">Metal Image</div>
+
+              <label className="mhc-checkbox" style={{ marginBottom: 16 }}>
+                <input type="checkbox" checked={imageAdj.greyscale} onChange={(e) => adj("greyscale", e.target.checked)} />
+                Greyscale
+              </label>
+
+              <Control label="Exposure" value={imageAdj.exposure} min={-2} max={2} step={0.05} onChange={(v) => adj("exposure", v)} />
+              <Control label="Contrast" value={imageAdj.contrast} min={-1} max={1} step={0.05} onChange={(v) => adj("contrast", v)} />
+              <Control label="Highlights" value={imageAdj.highlights} min={-1} max={1} step={0.05} onChange={(v) => adj("highlights", v)} />
+              <Control label="Shadows" value={imageAdj.shadows} min={-1} max={1} step={0.05} onChange={(v) => adj("shadows", v)} />
+
+              <div className="mhc-subsection">
+                <div className="mhc-subsection-title">Color Overlay</div>
+                <ColorControl label="Color" value={imageAdj.overlayColor} onChange={(v) => adj("overlayColor", v)} />
+                <Control label="Opacity" value={imageAdj.overlayOpacity} min={0} max={1} step={0.01} onChange={(v) => adj("overlayOpacity", v)} />
+              </div>
+
+              <div className="mhc-subsection">
+                <div className="mhc-subsection-title">Noise</div>
+                <label className="mhc-checkbox" style={{ marginBottom: 12 }}>
+                  <input type="checkbox" checked={imageAdj.noiseEnabled} onChange={(e) => adj("noiseEnabled", e.target.checked)} />
+                  Enable noise
+                </label>
+                {imageAdj.noiseEnabled && (
+                  <>
+                    <Control label="Grain Size" value={imageAdj.noiseSize} min={1} max={8} step={1} unit="px" onChange={(v) => adj("noiseSize", v)} />
+                    <ColorControl label="Color" value={imageAdj.noiseColor} onChange={(v) => adj("noiseColor", v)} />
+                    <Control label="Opacity" value={imageAdj.noiseOpacity} min={0} max={0.5} step={0.01} onChange={(v) => adj("noiseOpacity", v)} />
+                  </>
+                )}
+              </div>
+            </div>
+
+            {/* ── Halftone ──────────────────────────── */}
             <div className="mhc-section">
               <div className="mhc-section-title">Halftone</div>
               <Control label="Frequency" value={halftoneOpts.frequency} unit=" lpi" min={1} max={50} step={1} onChange={(v) => setHalftoneOpts((p) => ({ ...p, frequency: v }))} />
               <Control label="Angle" value={halftoneOpts.angle} unit="°" min={0} max={180} step={1} onChange={(v) => setHalftoneOpts((p) => ({ ...p, angle: v }))} />
               <Control label="Thickness" value={halftoneOpts.thickness} min={0.1} max={1.5} step={0.05} onChange={(v) => setHalftoneOpts((p) => ({ ...p, thickness: v }))} />
-              <div className="mhc-control">
-                <div className="mhc-control-header"><label>Line Color</label></div>
-                <div className="mhc-color-row">
-                  <input type="color" className="mhc-color-input" value={halftoneOpts.lineColor} onChange={(e) => setHalftoneOpts((p) => ({ ...p, lineColor: e.target.value }))} />
-                  <input
-                    type="text"
-                    className="mhc-color-hex-input"
-                    value={halftoneOpts.lineColor}
-                    onChange={(e) => {
-                      let v = e.target.value;
-                      if (!v.startsWith("#")) v = "#" + v;
-                      if (/^#[0-9a-fA-F]{0,6}$/.test(v)) setHalftoneOpts((p) => ({ ...p, lineColor: v }));
-                    }}
-                    spellCheck={false}
-                  />
-                </div>
-              </div>
+              <ColorControl label="Line Color" value={halftoneOpts.lineColor} onChange={(v) => setHalftoneOpts((p) => ({ ...p, lineColor: v }))} />
             </div>
 
+            {/* ── Composition ───────────────────────── */}
             <div className="mhc-section">
               <div className="mhc-section-title">Composition</div>
               <div className="mhc-control">
@@ -617,24 +805,12 @@ export default function MetalHalftoneCompositor() {
                   Transparent background
                 </label>
                 {!transparentBg && (
-                  <div className="mhc-color-row">
-                    <input type="color" className="mhc-color-input" value={bgColor} onChange={(e) => setBgColor(e.target.value)} />
-                    <input
-                      type="text"
-                      className="mhc-color-hex-input"
-                      value={bgColor}
-                      onChange={(e) => {
-                        let v = e.target.value;
-                        if (!v.startsWith("#")) v = "#" + v;
-                        if (/^#[0-9a-fA-F]{0,6}$/.test(v)) setBgColor(v);
-                      }}
-                      spellCheck={false}
-                    />
-                  </div>
+                  <ColorControl label="Color" value={bgColor} onChange={setBgColor} />
                 )}
               </div>
             </div>
 
+            {/* ── Masks ─────────────────────────────── */}
             <div className="mhc-section">
               <div className="mhc-section-title">Masks</div>
               <div className="mhc-mask-shapes">
@@ -651,6 +827,7 @@ export default function MetalHalftoneCompositor() {
               {selectedMask !== null && <div className="mhc-mask-hint">⌫ Backspace to delete selected</div>}
             </div>
 
+            {/* ── Export ─────────────────────────────── */}
             <div className="mhc-export-section">
               <div className="mhc-section-title">Export</div>
               <div className="mhc-export-options">
